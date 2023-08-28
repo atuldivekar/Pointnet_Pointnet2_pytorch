@@ -1,4 +1,6 @@
 import numpy as np
+import box_reg_utils
+import torch
 
 def normalize_data(batch_data):
     """ Normalize the batch data, use coordinates of the block centered at origin,
@@ -219,10 +221,25 @@ def shift_point_cloud(batch_data, shift_range=0.1):
           BxNx3 array, shifted batch of point clouds
     """
     B, N, C = batch_data.shape
-    shifts = np.random.uniform(-shift_range, shift_range, (B,3))
+    shifts = np.random.uniform(-shift_range, shift_range, (B,3)) #each pt in a batch shifted by same delta x,y,z 
     for batch_index in range(B):
         batch_data[batch_index,:,:] += shifts[batch_index,:]
     return batch_data
+
+def shift_point_cloud_and_box(batch_data, gtbox, propbox, shift_range=0.1):
+    """ Randomly shift point cloud. Shift is per point cloud.
+        Input:
+          BxNx3 array, original batch of point clouds, B*7 batch of gtboxes
+        Return:
+          BxNx3 array, shifted batch of point clouds, B*7 shifted batch of gtboxes
+    """
+    B, N, C = batch_data.shape
+    shifts = np.random.uniform(-shift_range, shift_range, (B,3)) #each pt in a batch shifted by same delta x,y,z 
+    for batch_index in range(B):
+        batch_data[batch_index,:,:] += shifts[batch_index,:]
+        gtbox[batch_index,0:3] += shifts[batch_index,:]  #only change midpoint
+        propbox[batch_index,0:3] += shifts[batch_index,:]
+    return batch_data, gtbox, propbox
 
 
 def random_scale_point_cloud(batch_data, scale_low=0.8, scale_high=1.25):
@@ -238,6 +255,25 @@ def random_scale_point_cloud(batch_data, scale_low=0.8, scale_high=1.25):
         batch_data[batch_index,:,:] *= scales[batch_index]
     return batch_data
 
+
+
+def random_scale_point_cloud_and_box(batch_data, gtbox, propbox, scale_low=0.8, scale_high=1.25):
+    """ Randomly scale the point cloud. Scale is per point cloud.
+        Input:
+            BxNx3 array, original batch of point clouds, B*7 batch of gtboxes
+        Return:
+            BxNx3 array, scaled batch of point clouds, B*7 scaled batch of gtboxes
+    """
+    B, N, C = batch_data.shape
+    scales = np.random.uniform(scale_low, scale_high, B)
+    for batch_index in range(B):
+        batch_data[batch_index,:,:] *= scales[batch_index]  #each pt in batch multiplied by scale
+        gtbox[batch_index,0:6] *= scales[batch_index]  #scale each term in gtbox except last (angle)
+        propbox[batch_index,0:6] *= scales[batch_index]
+    return batch_data, gtbox, propbox
+ 
+
+
 def random_point_dropout(batch_pc, max_dropout_ratio=0.875):
     ''' batch_pc: BxNx3 '''
     for b in range(batch_pc.shape[0]):
@@ -248,4 +284,12 @@ def random_point_dropout(batch_pc, max_dropout_ratio=0.875):
     return batch_pc
 
 
-
+ 
+def random_point_subsample(pts, max_dropout_ratio=0.2):
+    ''' pts: Nx3 '''
+    
+    dropout_ratio =  np.random.random()*max_dropout_ratio # 0~0.2
+    keep_idx = np.where(np.random.random((pts.shape[0]))>=dropout_ratio)[0]
+    pts = pts[keep_idx,:]
+           
+    return pts
