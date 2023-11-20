@@ -18,6 +18,7 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 from data_utils.ModelNetDataLoader import ModelNetDataLoader
+from data_utils.KittiAdbscanDataLoader import KittiAdbscanDataLoader
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
@@ -30,10 +31,10 @@ def parse_args():
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
     parser.add_argument('--batch_size', type=int, default=24, help='batch size in training')
     parser.add_argument('--model', default='pointnet_cls', help='model name [default: pointnet_cls]')
-    parser.add_argument('--num_category', default=40, type=int, choices=[10, 40],  help='training on ModelNet10/40')
+    parser.add_argument('--num_category', default=8, type=int,  help='training on Kitti_Adbscan')
     parser.add_argument('--epoch', default=200, type=int, help='number of epoch in training')
     parser.add_argument('--learning_rate', default=0.001, type=float, help='learning rate in training')
-    parser.add_argument('--num_point', type=int, default=1024, help='Point Number')
+    parser.add_argument('--num_point', type=int, default=200, help='Point Number')
     parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer for training')
     parser.add_argument('--log_dir', type=str, default=None, help='experiment root')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
@@ -116,10 +117,16 @@ def main(args):
 
     '''DATA LOADING'''
     log_string('Load dataset ...')
-    data_path = 'data/modelnet40_normal_resampled/'
+    data_path =  'data/kitti_adbscan/kitti_adbscan_OpenPCDet_split/' #  'data/modelnet40_normal_resampled/'
 
-    train_dataset = ModelNetDataLoader(root=data_path, args=args, split='train', process_data=args.process_data)
-    test_dataset = ModelNetDataLoader(root=data_path, args=args, split='test', process_data=args.process_data)
+    #train_dataset = ModelNetDataLoader(root=data_path, args=args, split='train', process_data=args.process_data)
+    #test_dataset = ModelNetDataLoader(root=data_path, args=args, split='test', process_data=args.process_data)
+    
+    #for train: for each cluster load gnd truth box
+    #for test: need GT box to calculate metric, not in inference
+    train_dataset = KittiAdbscanDataLoader(root=data_path, args=args, split='train', process_data=args.process_data)
+    test_dataset = KittiAdbscanDataLoader(root=data_path,  args=args, split='test', process_data=args.process_data)
+        
     trainDataLoader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, drop_last=True)
     testDataLoader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
 
@@ -130,7 +137,7 @@ def main(args):
     shutil.copy('models/pointnet2_utils.py', str(exp_dir))
     shutil.copy('./train_classification.py', str(exp_dir))
 
-    classifier = model.get_model(num_class, normal_channel=args.use_normals)
+    classifier = model.get_model(num_class, normal_channel=args.use_normals)    
     criterion = model.get_loss()
     classifier.apply(inplace_relu)
 
@@ -186,7 +193,8 @@ def main(args):
                 points, target = points.cuda(), target.cuda()
 
             pred, trans_feat = classifier(points)
-            loss = criterion(pred, target.long(), trans_feat)
+            
+            loss = criterion(pred, target.long(), trans_feat) 
             pred_choice = pred.data.max(1)[1]
 
             correct = pred_choice.eq(target.long().data).cpu().sum()

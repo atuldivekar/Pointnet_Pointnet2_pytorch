@@ -59,8 +59,8 @@ def index_points(points, idx):
     new_points = points[batch_indices, idx, :]
     return new_points
 
-
-def farthest_point_sample(xyz, npoint):
+@torch.jit.script
+def farthest_point_sample(xyz, npoint: int):  #xyz need to be dtype = Float
     """
     Input:
         xyz: pointcloud data, [B, N, 3]
@@ -168,7 +168,7 @@ class PointNetSetAbstraction(nn.Module):
         self.mlp_bns = nn.ModuleList()
         last_channel = in_channel
         for out_channel in mlp:
-            self.mlp_convs.append(nn.Conv2d(last_channel, out_channel, 1))
+            self.mlp_convs.append(nn.Conv2d(last_channel, out_channel, 1)) #1x1xD convolutions
             self.mlp_bns.append(nn.BatchNorm2d(out_channel))
             last_channel = out_channel
         self.group_all = group_all
@@ -189,15 +189,15 @@ class PointNetSetAbstraction(nn.Module):
         if self.group_all:
             new_xyz, new_points = sample_and_group_all(xyz, points)
         else:
-            new_xyz, new_points = sample_and_group(self.npoint, self.radius, self.nsample, xyz, points)
+            new_xyz, new_points = sample_and_group(self.npoint, self.radius, self.nsample, xyz, points) #npoint centroids each with nsample nbhrs in ball
         # new_xyz: sampled points position data, [B, npoint, C]
         # new_points: sampled points data, [B, npoint, nsample, C+D]
         new_points = new_points.permute(0, 3, 2, 1) # [B, C+D, nsample,npoint]
-        for i, conv in enumerate(self.mlp_convs):
+        for i, conv in enumerate(self.mlp_convs):   # applied to feature vectors of samples from all centroids simulataneously
             bn = self.mlp_bns[i]
             new_points =  F.relu(bn(conv(new_points)))
 
-        new_points = torch.max(new_points, 2)[0]
+        new_points = torch.max(new_points, 2)[0] 
         new_xyz = new_xyz.permute(0, 2, 1)
         return new_xyz, new_points
 

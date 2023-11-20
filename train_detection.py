@@ -1,5 +1,6 @@
 """
 Author: Atul Divekar
+file: train_detection.py
 Date: June 2023
 """
 
@@ -31,7 +32,7 @@ def parse_args():
     parser = argparse.ArgumentParser('training')
     parser.add_argument('--use_cpu', action='store_true', default=False, help='use cpu mode')
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
-    parser.add_argument('--batch_size', type=int, default=24, help='batch size in training')
+    parser.add_argument('--batch_size', type=int, default=30, help='batch size in training')
     parser.add_argument('--model', default='pointnet2_cls_ssg_adbscan', help='model name [default: pointnet2_cls_ssg_adbscan]')
     parser.add_argument('--num_category', default=9, type=int,  help='training on Kitti_Adbscan')
     parser.add_argument('--epoch', default=200, type=int, help='number of epoch in training')
@@ -40,12 +41,9 @@ def parse_args():
     parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer for training')
     parser.add_argument('--log_dir', type=str, default=None, help='experiment root')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
-    parser.add_argument('--use_normals', action='store_true', default=False, help='use normals')
-    parser.add_argument('--process_data', action='store_true', default=False, help='save data offline')
+    parser.add_argument('--use_normals', action='store_true', default=False, help='use normals')   
     parser.add_argument('--use_uniform_sample', action='store_true', default=False, help='use uniform sampling')
-    parser.add_argument('--data_path', type=str,  help='data path')   
-    parser.add_argument('--train_gt_proposal_file', type=str,  help='train gt proposal file') 
-    parser.add_argument('--test_proposal_file', type=str,  help='test proposal file with gt') 
+    parser.add_argument('--data_path', type=str,  help='data path')       
     parser.add_argument('--gt_avail_in_test', action='store_true', default = True,  help='gt available in test proposal file')  
     #gt always present in test proposal file, above line sets the flag to True even when not used on cmd line as needed
     return parser.parse_args()
@@ -56,7 +54,7 @@ def inplace_relu(m):
     if classname.find('ReLU') != -1:
         m.inplace=True
 
-def test(model, loader, num_class=40):
+def test(model, loader, num_class=40):   #still in gpu
     
     category_instance_acc = np.zeros((num_class, 3))
     orientation_correct_count = 0
@@ -67,10 +65,10 @@ def test(model, loader, num_class=40):
     for j, (points, class_target, gtbox, propbox, fname) in tqdm(enumerate(loader), total=len(loader)):
             
         if not args.use_cpu:
-            points, class_target = points.cuda(), class_target.cuda()  
+            points, class_target, gtbox, propbox = points.cuda(), class_target.cuda(), gtbox.cuda(), propbox.cuda()
 
         points = points.transpose(2, 1)
-        class_pred, reg_bbox_pred, orien_pred, _ = classifier(points)
+        class_pred, reg_bbox_pred = classifier(points)
         pred_choice = class_pred.data.max(1)[1]
         
         #print(points)
@@ -80,20 +78,22 @@ def test(model, loader, num_class=40):
         #print('class_target')
         #print(class_target)
 
-        gtbox_pred = box_reg_utils.estimate_gt_box(reg_bbox_pred,orien_pred,propbox.cuda())  #all tensors in gpu returns in gpu
-        
-        IoU3D = box_reg_utils.IoU_3D(gtbox.cuda(),gtbox_pred)
-        IoU3D_sum +=  IoU3D.cpu().sum()
+        gtbox_pred = box_reg_utils.estimate_gt_box(reg_bbox_pred,propbox,True)  #all tensors in gpu returns in gpu
 
-        orien_target = propbox[:,11].cpu()
-        orien_choice = orien_pred.data.max(1)[1].cpu()
+        #print('gtbox')
+        #print(gtbox)
 
-        for cat in np.unique(class_target.cpu()):              
+        #print('gtbox_pred')
+        #print(gtbox_pred)
+
+        IoU3D = box_reg_utils.IoU_3D(gtbox.cpu().detach(),gtbox_pred.cpu().detach()) #need all i/p in cpu, return cpu
+        IoU3D_sum +=  IoU3D.sum()
+
+
+        for cat in np.unique(class_target.cpu()):    #cat is in cpu, so need class_target in cpu          
             category_instance_acc[cat, 1] += (class_target == cat).cpu().sum()  # num instances of cat in class_target
             category_instance_acc[cat, 0] += pred_choice[class_target == cat].eq(cat).cpu().sum()    # of these, correctly predicted
         
-        orientation_correct_count += orien_choice.eq(orien_target.long().data).cpu().sum()
-    
 
     category_instance_acc[:, 2] = category_instance_acc[:, 0] / category_instance_acc[:, 1]
 
@@ -103,11 +103,10 @@ def test(model, loader, num_class=40):
     totals = np.sum(category_instance_acc[:,0:2],axis=0)
     print('correct classified {0} of {1}'.format(totals[0],totals[1]))
     
-    instance_acc = totals[0] / totals[1]
-    orien_instance_acc = orientation_correct_count / totals[1]    
+    instance_acc = totals[0] / totals[1]    
     IoU_mean = IoU3D_sum / totals[1] 
               
-    return instance_acc, IoU_mean, orien_instance_acc
+    return instance_acc, IoU_mean
 
 
 def main(args):
@@ -134,6 +133,10 @@ def main(args):
     log_dir = exp_dir.joinpath('logs/')
     log_dir.mkdir(exist_ok=True)
 
+    ir_model_path = os.path.join(exp_dir,'ir_model')  #delete ir model dir, so inference is forced to create it again with latest chkpt
+    if os.path.exists(ir_model_path):
+        shutil.rmtree(ir_model_path) 
+
     '''LOG'''
     args = parse_args()
     logger = logging.getLogger("Model")
@@ -152,8 +155,8 @@ def main(args):
 
     #for train: for each cluster load gnd truth box
    
-    train_dataset = KittiAdbscanDataLoader(root=data_path, args=args, split='train', process_data=args.process_data)
-    test_dataset = KittiAdbscanDataLoader(root=data_path,  args=args, split='test', process_data=args.process_data)
+    train_dataset = KittiAdbscanDataLoader(root=data_path, args=args, split='train')
+    test_dataset = KittiAdbscanDataLoader(root=data_path,  args=args, split='test')
         
     trainDataLoader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, drop_last=True)
     testDataLoader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
@@ -206,8 +209,7 @@ def main(args):
     for epoch in range(start_epoch, args.epoch):
         log_string('Epoch %d (%d/%s):' % (global_epoch + 1, epoch + 1, args.epoch))
         
-        category_instance_acc = np.zeros((num_class, 3))
-        orientation_correct_count = 0
+        category_instance_acc = np.zeros((num_class, 3))        
         IoU3D_sum = 0
 
         classifier = classifier.train()
@@ -218,57 +220,23 @@ def main(args):
             optimizer.zero_grad()
 
             points = points.data.numpy()
-            
+         
             points[:, :, 0:3], gtbox, propbox = provider.random_scale_point_cloud_and_box(points[:, :, 0:3],gtbox,propbox) #scale, shift gt box accordingly, generate propbox 
             points[:, :, 0:3], gtbox, propbox = provider.shift_point_cloud_and_box(points[:, :, 0:3],gtbox,propbox)
            
-            '''
-            #gtbox, propbox Tensors kept in cpu 
-            nanP = np.any(np.isnan(points))
-            if(nanP):
-                print("nan present2")
-            else:
-                print("no nan")
-
-            infP = np.any(np.isinf(points))
-            if(infP):
-                print("inf present2")
-            else:
-                print("no inf")
-            '''
-
             points = torch.Tensor(points)
             points = points.transpose(2, 1) #B,N,3 -> B,3,N           
             if not args.use_cpu:
-                points, class_target = points.cuda(), class_target.cuda()   #gtbox propbox in cpu
-            
+                points, class_target, gtbox, propbox = points.cuda(), class_target.cuda(), gtbox.cuda(), propbox.cuda()   #gtbox propbox in cpu
 
-            '''
-            is_param_nan = torch.stack([torch.isnan(p).any() for p in classifier.parameters()]).any()
-            is_param_inf = torch.stack([torch.isinf(p).any() for p in classifier.parameters()]).any()
-
-            
-            if(is_param_nan):
-                print("param nan present")
-            else:
-                print("no param nan")
-
-            if(is_param_inf):
-                print("param inf present")
-            else:
-                print("no param inf")
-            '''
-
-            class_pred, reg_bbox_pred, orien_pred, trans_feat = classifier(points)            
-            #class_target, class_pred, reg_bbox_pred, orien_pred are Tensors in GPU
+            #gtbox, propbox Tensors in gpu 
+            #classifier expects points to be Float
+           
+            class_pred, reg_bbox_pred = classifier(points)   #class_pred, reg_bbox_pred are Tensors in GPU
             
             #class_pred:  batch_sz * categories tensor -- for each member in batch log(prob) of being in each cat.
             pred_choice = class_pred.data.max(1)[1] #for each row, find max, get index (from [1])
             
-            orien_target = propbox[:,11].cpu()
-            orien_choice = orien_pred.data.max(1)[1].cpu()
-            
-
             '''
             print('\nnew batch ground truth')
             print('class_target')
@@ -284,68 +252,31 @@ def main(args):
             print('pred_choice')
             print(pred_choice) 
             print('reg_bbox_pred')
-            print(reg_bbox_pred)
-            print('orien_pred')
-            print(orien_pred)
-            
-            print('orien_choice')
-            print(orien_choice)
+            print(reg_bbox_pred)           
             '''
-           
+
+            #print(propbox)
+            #print(gtbox)
+            #input()
+
+            loss = criterion(class_pred, class_target.long(), reg_bbox_pred, propbox, gtbox) #all i/p, o/p are Tensors in gpu                   
+            gtbox_pred = box_reg_utils.estimate_gt_box(reg_bbox_pred,propbox,True)  #all inputs are Tensors in gpu, returns in gpu
+
+            #print('gtbox_pred')
+            #print(gtbox_pred)
             
-
-            loss = criterion(class_pred, class_target.long(), reg_bbox_pred, propbox, gtbox, orien_pred) #Tensors propbox, gtbox on cpu class_target on gpu                   
-            gtbox_pred = box_reg_utils.estimate_gt_box(reg_bbox_pred,orien_pred,propbox.cuda())  #all inputs are Tensors in gpu, returns in gpu
-
-            IoU3D = box_reg_utils.IoU_3D(gtbox.cuda(),gtbox_pred)   
-            IoU3D_sum +=  IoU3D.cpu().sum()
+            IoU3D = box_reg_utils.IoU_3D(gtbox.cpu().detach(),gtbox_pred.cpu().detach())  #i/ps must be in cpu   
+            IoU3D_sum +=  IoU3D.sum()
             #print('IoU')  
             #print(IoU)     
             #input()
 
             for cat in np.unique(class_target.cpu()):              
                 category_instance_acc[cat, 1] += (class_target == cat).cpu().sum()  # num instances of cat in class_target
-                category_instance_acc[cat, 0] += pred_choice[class_target == cat].eq(cat).cpu().sum()    # of these, correctly predicted
-        
-            orientation_correct_count += orien_choice.eq(orien_target.long().data).cpu().sum()
+                category_instance_acc[cat, 0] += pred_choice[class_target == cat].eq(cat).cpu().sum()    # of these, correctly predicted           
     
             loss.backward()
-            
-            '''
-            is_param_nan = torch.stack([torch.isnan(p).any() for p in classifier.parameters()]).any()
-
-            if(is_param_nan):
-                print("param nan present2")
-            else:
-                print("no param nan2")
-
-            is_param_inf = torch.stack([torch.isinf(p).any() for p in classifier.parameters()]).any()
-            if(is_param_inf):
-                print("param inf present2")
-            else:
-                print("no param inf2")
-            '''
-
-            for name, param in classifier.named_parameters():
-                if torch.isnan(param.grad).any():
-                    print("{} nan gradient found".format(name))
-                if torch.isinf(param.grad).any():
-                    print("{} inf gradient found".format(name))
-
-
-
-
             optimizer.step()
-
-            is_param_nan = torch.stack([torch.isnan(p).any() for p in classifier.parameters()]).any()
-
-            '''
-            if(is_param_nan):
-                print("param nan present3")
-            else:
-                print("no param nan3")
-            '''
-
             global_step += 1
 
         category_instance_acc[:, 2] = category_instance_acc[:, 0] / category_instance_acc[:, 1]
@@ -356,30 +287,32 @@ def main(args):
         totals = np.sum(category_instance_acc[:,0:2],axis=0)
         print('correct classified {0} of {1}'.format(totals[0],totals[1]))
     
-        train_instance_acc = totals[0] / totals[1]
-        orien_train_instance_acc = orientation_correct_count / totals[1]    
+        train_instance_acc = totals[0] / totals[1]          
         IoU_train_mean = IoU3D_sum / totals[1]  
 
-        log_string('Train Instance Accuracy: %f' % train_instance_acc)               
-        log_string('Train Orien Instance Accuracy: %f' % orien_train_instance_acc)       
+        log_string('Train Instance Accuracy: %f' % train_instance_acc)                             
         log_string('Train IoU Mean: %f' % IoU_train_mean)
         
         
         with torch.no_grad():
-            instance_acc,  IoU_mean, orien_instance_acc  = test(classifier.eval(), testDataLoader, num_class=num_class)
+            instance_acc,  IoU_mean  = test(classifier.eval(), testDataLoader, num_class=num_class)
 
-            if (instance_acc >= best_instance_acc):
+            best_found = False
+            if (instance_acc >= best_instance_acc):  #if either improves, save latest model
                 best_instance_acc = instance_acc
-                best_epoch = epoch + 1
-
+                best_found = True
+               
             if (IoU_mean >= best_IoU_mean):
                 best_IoU_mean = IoU_mean 
+                best_found = True
+                            
+            if(best_found):
                 best_epoch = epoch + 1   
-            
-            log_string('Test Instance Accuracy: %f' % (instance_acc))
-            log_string('Best Instance Accuracy: %f' % (best_instance_acc))
-            log_string('Test IoU Mean: %f' % (IoU_mean))
-            log_string('Test Orien Instance Accuracy: %f' % (orien_instance_acc))
+
+            log_string('Val Instance Accuracy: %f' % (instance_acc))
+            log_string('Val Best Instance Accuracy: %f' % (best_instance_acc))
+            log_string('Val IoU Mean: %f' % (IoU_mean))
+            log_string('Val Best IoU Mean: %f' % (best_IoU_mean))            
 
             if (instance_acc >= best_instance_acc or IoU_mean >= best_IoU_mean):
                 logger.info('Save model...')

@@ -6,92 +6,70 @@ import shapely.geometry
 import shapely.affinity
 
 
+#if gt_rz, prop_rz in bottom coord in lidar, difference between them needs to be adjusted
+def find_delta(gt_rz,prop_rz): #only in loss function -- all in gpu 
+            
+    delta = gt_rz - prop_rz #in gpu
+    ind = torch.logical_and(gt_rz > math.pi/2, prop_rz < -math.pi/2)  #delta will be > 180, adjust to 2*pi - delta, results in small +ve
+    delta[ind] = torch.tensor([2*math.pi],device='cuda').repeat(torch.sum(ind)) - delta[ind]
+    ind = torch.logical_and(gt_rz < -math.pi/2, prop_rz > math.pi/2)  #delta will be < -180, adjust to 2*pi + delta, results in small -ve
+    delta[ind] = torch.tensor([2*math.pi],device='cuda').repeat(torch.sum(ind)) + delta[ind]
 
-def get_lidar_angle_no_ry(vec):   #vec in gpu
+    return delta
 
-    B, S = vec.shape    
-    angle = torch.empty([B],dtype = torch.double,device='cuda')  #in gpu
-    abs_sine = torch.abs(vec[:,1])/torch.norm(vec,dim=1)
+def rollover_lidar_angle(rz,is_gpu):  #if is_gpu: i/p and o/p in gpu, else cpu
 
-    ind = torch.logical_and(vec[:,0] >= 0,vec[:,1] <= 0)
-    angle[ind] = -torch.asin(abs_sine[ind])
+    if is_gpu:
+        rz_result = rz.clone().detach() #in cpu or gpu depending on rz
+        ind = rz > math.pi
+        rz_result[ind] = rz[ind] - torch.tensor([2*math.pi],device='cuda').repeat(torch.sum(ind)) 
+        ind = rz < -math.pi
+        rz_result[ind] = rz[ind] + torch.tensor([2*math.pi],device='cuda').repeat(torch.sum(ind))
 
-    ind = torch.logical_and(vec[:,0] < 0,vec[:,1] <= 0)        
-    angle[ind] = torch.asin(abs_sine[ind]) - torch.tensor([math.pi]).repeat(torch.sum(ind)).cuda()
+    else:
+        rz_result = rz.clone().detach() #in cpu or gpu depending on rz
+        ind = rz > math.pi
+        rz_result[ind] = rz[ind] - torch.tensor([2*math.pi],device='cpu').repeat(torch.sum(ind)) 
+        ind = rz < -math.pi
+        rz_result[ind] = rz[ind] + torch.tensor([2*math.pi],device='cpu').repeat(torch.sum(ind))
 
-    ind = torch.logical_and(vec[:,0] >= 0,vec[:,1] > 0)    
-    angle[ind] = torch.asin(abs_sine[ind]) 
+    return rz_result
 
-    ind = torch.logical_and(vec[:,0] < 0,vec[:,1] > 0) 
-    angle[ind] = torch.tensor([math.pi]).repeat(torch.sum(ind)).cuda() - torch.asin(abs_sine[ind]) 
- 
-    #print('angle')
-    #print(angle)
 
-    return angle
-        
 
-#gt_box_mid[0], gt_box_mid[1], gt_box_mid[2], gt_velo_dx, gt_velo_dy, gt_velo_dz, gt_velo_rz, 
-#prop_m[0],prop_m[1],prop_m[2],prop_bbox_evec0_dim,prop_bbox_evec1_dim,prop_bbox_velo_dz,prop_velo_rz,evec[0,0],evec[1,0],evec[0,1],evec[1,1],ind_min  
-# 0        1         2         3                   4                   5                 6              7         8         9         10        11
+#gt_box_mid[0], gt_box_mid[1], gt_box_mid[2], gt_velo_evec0_dim, gt_velo_evec1_dim, gt_velo_dz, gt_velo_rz, 
+#prop_m[0],prop_m[1],prop_m[2],prop_bbox_evec0_dim,prop_bbox_evec1_dim,prop_bbox_velo_dz,prop_velo_rz 
+# 0        1         2         3                   4                   5                 6              
 #prop_dx,dy used in place of prop_bbox[:,3,4] 
 
 
-def estimate_gt_box(reg_bbox_preds, orien_pred, prop_bbox):   #all tensors in gpu returns in gpu
+def estimate_gt_box(reg_bbox_preds, prop_bbox, is_gpu):   #if is_gpu: all i/p and o/p on gpu, else cpu
 
         #print('estimate_gt_box')
-        B, _ = reg_bbox_preds.shape    
-        gt_box_est = torch.zeros([B,7],dtype=torch.float64,device='cuda')  #tensor in gpu
+        B, _ = reg_bbox_preds.shape  
+        if(is_gpu):  
+            gt_box_est = torch.zeros([B,7],dtype=torch.float64,device='cuda')  #tensor 
+        else:
+            gt_box_est = torch.zeros([B,7],dtype=torch.float64,device='cpu')
 
-        orien_choice = orien_pred.data.max(1)[1]  #B*1 tensor
-        #print('orien_choice')
-        #print(orien_choice)    
+
+        gt_box_est[:,0] = reg_bbox_preds[:,0] * prop_bbox[:,3] + prop_bbox[:,0]
+        gt_box_est[:,1] = reg_bbox_preds[:,1] * prop_bbox[:,3] + prop_bbox[:,1]
+        gt_box_est[:,2] = reg_bbox_preds[:,2] * prop_bbox[:,3] + prop_bbox[:,2]
         
-        use0 = torch.logical_or(orien_choice==0, orien_choice==2)
-             
-        #use orien_choice to select dx and dy
-        prop_dx = torch.where(use0, prop_bbox[:,3], prop_bbox[:,4])
-        prop_dy = torch.where(use0, prop_bbox[:,4], prop_bbox[:,3])
-        
-        gt_box_est[:,0] = reg_bbox_preds[:,0] * prop_dx + prop_bbox[:,0]
-        gt_box_est[:,1] = reg_bbox_preds[:,1] * prop_dy + prop_bbox[:,1]
-        gt_box_est[:,2] = reg_bbox_preds[:,2] * prop_bbox[:,5] + prop_bbox[:,2]
-        
-        gt_box_est[:,3] = torch.exp(reg_bbox_preds[:,3]) * prop_dx
-        gt_box_est[:,4] = torch.exp(reg_bbox_preds[:,4]) * prop_dy
+        gt_box_est[:,3] = torch.exp(reg_bbox_preds[:,3]) * prop_bbox[:,3]
+        gt_box_est[:,4] = torch.exp(reg_bbox_preds[:,4]) * prop_bbox[:,4]
         gt_box_est[:,5] = torch.exp(reg_bbox_preds[:,5]) * prop_bbox[:,5]
-
         
-        use0 = torch.stack([use0,use0],dim=1)        
-        #print(use0)      
-        #print(prop_bbox[:,7:9])
-        #print(prop_bbox[:,9:11])
-        #use orien_choice to select evec and find prop_rz     
-        evec = torch.where(use0,prop_bbox[:,7:9],prop_bbox[:,9:11])
-        #print(evec)      
-
-        no_sign_change = torch.logical_or(orien_choice==0,orien_choice==1)
-        no_sign_change = torch.stack([no_sign_change,no_sign_change],dim=1)       
-        #print(no_sign_change)
-        evec = torch.where(no_sign_change,evec,-evec) 
-        
-        #print('evec')        
-        #print(evec)        
-      
-        prop_rz = get_lidar_angle_no_ry(evec) #evec is Tensor in gpu
-
-        #print('prop_rz')        
-        #print(prop_rz)       
-        
-        #reg_bbox_preds[:,6] is predicted delta_tgt_rz
-        
-        gt_box_est[:,6] = torch.clamp(reg_bbox_preds[:,6] + prop_rz, min=-math.pi+0.001, max=math.pi-0.001)    #if > pi or < -pi -- for now just clamp -- could rollover
-                                                               
+        #reg_bbox_preds[:,6] is predicted delta_tgt_rz                
+        gt_box_est[:,6] = rollover_lidar_angle(reg_bbox_preds[:,6] + prop_bbox[:,6],is_gpu) 
+                                                      
         #print('gt_box_est')
         #print(gt_box_est)                
 
 
         return gt_box_est
+
 
 
 class RotatedRect:
@@ -117,32 +95,30 @@ class RotatedRect:
 
 
 
-def IoU_3D(gtbox,gtbox_pred):  #tensors in gpu  #assumes boxes rotated only around vertical 
-
+def IoU_3D(gtbox,gtbox_pred):  #shapely needs i/ps in cpu, so always in cpu  #assumes boxes rotated only around vertical 
     '''
     print('gtbox')
     print(gtbox)
     print('gtbox_pred')
     print(gtbox_pred)
     '''
-    
     B = gtbox.shape[0]  
 
-    gt_velo_mid_fwd = gtbox[:,0]
-    gt_velo_mid_across = gtbox[:,1]
+    gt_velo_mid_fwd = gtbox[:,0]    #lidar x
+    gt_velo_mid_across = gtbox[:,1] #lidar y
     gt_velo_mid_vert = gtbox[:,2]
-    gt_velo_dim_fwd = gtbox[:,3]  #fwd before rot
-    gt_velo_dim_across = gtbox[:,4]  #across
+    gt_velo_evec0_dim = gtbox[:,3]  
+    gt_velo_evec1_dim = gtbox[:,4]  
     gt_velo_dim_vert = gtbox[:,5]  #vert
-    gt_velo_rz = gtbox[:,6] # +ve ccw upto pi,  -ve cw upto -pi, need to convert
+    gt_velo_evec0_rz = gtbox[:,6] # angle of evec0 with lidar x;    +ve ccw upto pi,  -ve cw upto -pi, need to convert
 
     gtp_velo_mid_fwd = gtbox_pred[:,0]
     gtp_velo_mid_across = gtbox_pred[:,1]
     gtp_velo_mid_vert = gtbox_pred[:,2]
-    gtp_velo_dim_fwd = gtbox_pred[:,3]  #fwd before rot
-    gtp_velo_dim_across = gtbox_pred[:,4]  #across
+    gtp_velo_evec0_dim = gtbox_pred[:,3]  
+    gtp_velo_evec1_dim = gtbox_pred[:,4]  
     gtp_velo_dim_vert = gtbox_pred[:,5]  #vert
-    gtp_velo_rz = gtbox_pred[:,6]
+    gtp_velo_evec0_rz = gtbox_pred[:,6]
 
     gt_velo_top    = gt_velo_mid_vert + gt_velo_dim_vert / 2
     gt_velo_bottom = gt_velo_mid_vert - gt_velo_dim_vert / 2
@@ -152,7 +128,9 @@ def IoU_3D(gtbox,gtbox_pred):  #tensors in gpu  #assumes boxes rotated only arou
 
     intersec_top    = torch.min(gt_velo_top,gtp_velo_top)
     intersec_bottom = torch.max(gt_velo_bottom,gtp_velo_bottom)
-    intersec_ht     = torch.max(torch.zeros(B,dtype=torch.float64,device='cuda'), intersec_top - intersec_bottom)
+    
+    intersec_ht  = torch.max(torch.zeros(B,dtype=torch.float64,device='cpu'), intersec_top - intersec_bottom)
+   
     '''
     print('gt_velo_top,gt_velo_bottom')
 
@@ -165,19 +143,20 @@ def IoU_3D(gtbox,gtbox_pred):  #tensors in gpu  #assumes boxes rotated only arou
     print('intersec_ht')
     print(intersec_ht)
     '''
-    gt_vol  = gt_velo_dim_fwd  * gt_velo_dim_across  * gt_velo_dim_vert
-    gtp_vol = gtp_velo_dim_fwd * gtp_velo_dim_across * gtp_velo_dim_vert
+    gt_vol  = gt_velo_evec0_dim  * gt_velo_evec1_dim  * gt_velo_dim_vert
+    gtp_vol = gtp_velo_evec0_dim * gtp_velo_evec1_dim * gtp_velo_dim_vert
     '''
     print('gt_vol')
     print(gt_vol)
     print('gtp_vol')
     print(gtp_vol)
     '''
-    intersec_area = torch.zeros(B,dtype=torch.float64,device='cuda')
+    
+    intersec_area = torch.zeros(B,dtype=torch.float64,device='cpu')
     
     for ind in range(B):
            
-        gt_rz =  gt_velo_rz[ind]        
+        gt_rz =  gt_velo_evec0_rz[ind]        
         #print(gt_rz)
 
         if(gt_rz<0):  #convert to +ve ccw upto 2*pi
@@ -185,15 +164,15 @@ def IoU_3D(gtbox,gtbox_pred):  #tensors in gpu  #assumes boxes rotated only arou
            
         #print(gt_velo_mid_across[ind])  
         #print(gt_velo_mid_fwd[ind])
-        #print(gt_velo_dim_across[ind])
-        #print(gt_velo_dim_fwd[ind])
+        #print(gt_velo_evec1_dim[ind])
+        #print(gt_velo_evec0_dim[ind])
         #print(gt_velo_dim_vert[ind])
         #print(gt_rz)
         #print("\n")
 
-        r1 = RotatedRect(gt_velo_mid_across[ind],gt_velo_mid_fwd[ind],gt_velo_dim_across[ind],gt_velo_dim_fwd[ind],gt_rz) 
+        r1 = RotatedRect(gt_velo_mid_across[ind],gt_velo_mid_fwd[ind],gt_velo_evec1_dim[ind],gt_velo_evec0_dim[ind],gt_rz) #shapely needs all in cpu
                    
-        gtp_rz =  gtp_velo_rz[ind]
+        gtp_rz =  gtp_velo_evec0_rz[ind]
         #print(gtp_rz)
           
         if(gtp_rz<0):
@@ -201,13 +180,13 @@ def IoU_3D(gtbox,gtbox_pred):  #tensors in gpu  #assumes boxes rotated only arou
         
         #print(gtp_velo_mid_across[ind])  
         #print(gtp_velo_mid_fwd[ind])
-        #print(gtp_velo_dim_across[ind])
-        #print(gtp_velo_dim_fwd[ind])
+        #print(gtp_velo_evec1_dim[ind])
+        #print(gtp_velo_evec0_dim[ind])
         #print(gtp_velo_dim_vert[ind])
         #print(gtp_rz)
         #print("\n")
 
-        r2 = RotatedRect(gtp_velo_mid_across[ind],gtp_velo_mid_fwd[ind],gtp_velo_dim_across[ind],gtp_velo_dim_fwd[ind],gtp_rz)
+        r2 = RotatedRect(gtp_velo_mid_across[ind],gtp_velo_mid_fwd[ind],gtp_velo_evec1_dim[ind],gtp_velo_evec0_dim[ind],gtp_rz)
          
         intersec = r1.intersection(r2)
 

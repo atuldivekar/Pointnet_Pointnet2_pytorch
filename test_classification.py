@@ -3,6 +3,7 @@ Author: Benny
 Date: Nov 2019
 """
 from data_utils.ModelNetDataLoader import ModelNetDataLoader
+from data_utils.KittiAdbscanDataLoader import KittiAdbscanDataLoader
 import argparse
 import numpy as np
 import os
@@ -23,8 +24,8 @@ def parse_args():
     parser.add_argument('--use_cpu', action='store_true', default=False, help='use cpu mode')
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
     parser.add_argument('--batch_size', type=int, default=24, help='batch size in training')
-    parser.add_argument('--num_category', default=40, type=int, choices=[10, 40],  help='training on ModelNet10/40')
-    parser.add_argument('--num_point', type=int, default=1024, help='Point Number')
+    parser.add_argument('--num_category', default=8, type=int,   help='training on ModelNet10/40')  # choices=[10, 40],
+    parser.add_argument('--num_point', type=int, default=200, help='Point Number')
     parser.add_argument('--log_dir', type=str, required=True, help='Experiment root')
     parser.add_argument('--use_normals', action='store_true', default=False, help='use normals')
     parser.add_argument('--use_uniform_sample', action='store_true', default=False, help='use uniform sampiling')
@@ -41,25 +42,37 @@ def test(model, loader, num_class=40, vote_num=1):
         if not args.use_cpu:
             points, target = points.cuda(), target.cuda()
 
+        #print(points.size())
         points = points.transpose(2, 1)
-        vote_pool = torch.zeros(target.size()[0], num_class).cuda()
-
+        #print(points.size())
+        vote_pool = torch.zeros(target.size()[0], num_class).cuda()  #24 * 9
+        #print(vote_pool)
         for _ in range(vote_num):
             pred, _ = classifier(points)
+            #print(pred)
             vote_pool += pred
         pred = vote_pool / vote_num
-        pred_choice = pred.data.max(1)[1]
+        #print(pred)   # batch_sz * categories tensor -- for each member in batch logits prob of being in each cat.
+        #input()
+        pred_choice = pred.data.max(1)[1] #for each row, find max, get index (from [1])
+        #print(pred_choice)
+          
 
         for cat in np.unique(target.cpu()):
-            classacc = pred_choice[target == cat].eq(target[target == cat].long().data).cpu().sum()
-            class_acc[cat, 0] += classacc.item() / float(points[target == cat].size()[0])
-            class_acc[cat, 1] += 1
-        correct = pred_choice.eq(target.long().data).cpu().sum()
-        mean_correct.append(correct.item() / float(points.size()[0]))
+            classacc = pred_choice[target == cat].eq(target[target == cat].long().data).cpu().sum() #no. of correct predictions of true class 'cat'            
+            #print(points[target == cat].size()[0]) #no. of occurrences of true class 'cat'
+            class_acc[cat, 0] += classacc.item() / float(points[target == cat].size()[0]) #frac of correct pred of occurrences of true class 'cat' (TP/(TP+FN))
+            class_acc[cat, 1] += 1 # no. of times above frac is counted for this class
+        correct = pred_choice.eq(target.long().data).cpu().sum() #no of times pred classes match true label in current batch
+        mean_correct.append(correct.item() / float(points.size()[0])) #frac pred classes match true label/batch size
 
-    class_acc[:, 2] = class_acc[:, 0] / class_acc[:, 1]
-    class_acc = np.mean(class_acc[:, 2])
-    instance_acc = np.mean(mean_correct)
+    class_acc[:, 2] = class_acc[:, 0] / class_acc[:, 1]  #avg frac of correct pred of occurrences of true class 'cat'
+    print(class_acc)
+    class_acc = np.mean(class_acc[:, 2]) #mean over all classes
+
+    print(mean_correct)
+    instance_acc = np.mean(mean_correct)  # avg percent of each batch that is correctly classified
+
     return instance_acc, class_acc
 
 
@@ -87,10 +100,11 @@ def main(args):
     log_string(args)
 
     '''DATA LOADING'''
-    log_string('Load dataset ...')
-    data_path = 'data/modelnet40_normal_resampled/'
+    log_string('Load dataset ...')    
+    data_path =  'data/kitti_adbscan/kitti_adbscan_OpenPCDet_split/' #data_path = 'data/modelnet40_normal_resampled/'
+    #test_dataset = ModelNetDataLoader(root=data_path, args=args, split='test', process_data=False)
+    test_dataset = KittiAdbscanDataLoader(root=data_path, args=args, split='test', process_data=False)
 
-    test_dataset = ModelNetDataLoader(root=data_path, args=args, split='test', process_data=False)
     testDataLoader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
 
     '''MODEL LOADING'''
@@ -98,7 +112,7 @@ def main(args):
     model_name = os.listdir(experiment_dir + '/logs')[0].split('.')[0]
     model = importlib.import_module(model_name)
 
-    classifier = model.get_model(num_class, normal_channel=args.use_normals)
+    classifier = model.get_model(num_class, normal_channel= False) #args.use_normals)
     if not args.use_cpu:
         classifier = classifier.cuda()
 
