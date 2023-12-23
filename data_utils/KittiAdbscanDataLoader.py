@@ -96,8 +96,8 @@ class KittiAdbscanDataLoader(Dataset):
                     self.gtboxes.append(np.array([float(z[3]),float(z[4]),float(z[5]),float(z[6]),float(z[7]),float(z[8]),float(z[9])]))
                     self.propboxes.append(np.array([float(z[10]),float(z[11]),float(z[12]),float(z[13]),float(z[14]),float(z[15]),float(z[16])])) 
             
-            #gt_box_mid[0], gt_box_mid[1], gt_box_mid[2], gt_velo_dx, gt_velo_dy, gt_velo_dz, gt_evec0_rz, 
-            #prop_m[0],prop_m[1],prop_m[2],prop_bbox_evec0_dim,prop_bbox_evec1_dim,prop_bbox_velo_dz,prop_evec0_rz 
+            #gt_box_mid[0], gt_box_mid[1], gt_box_mid[2], gt_velo_dx, gt_velo_dy, gt_velo_dz, gt_velo_rz
+            #prop_m[0],prop_m[1],prop_m[2],prop_bbox_shorter,prop_bbox_longer,prop_bbox_velo_dz,prop_shorter_rz 
             #print(shape_names)
             #input()
         
@@ -108,7 +108,7 @@ class KittiAdbscanDataLoader(Dataset):
                 shape_names.append('Test') 
                 self.fnames.append(z[0])
                 self.propboxes.append(np.array([float(z[1]),float(z[2]),float(z[3]),float(z[4]),float(z[5]),float(z[6]),float(z[7])]))         
-                #format(fname,prop_m[0],prop_m[1],prop_m[2],prop_bbox_evec0_dim,prop_bbox_evec1_dim,prop_bbox_velo_dz,prop_evec0_rz ))    
+                #format(fname,prop_m[0],prop_m[1],prop_m[2],prop_bbox_shorter,prop_bbox_longer,prop_bbox_velo_dz,prop_shorter_rz ))    
                 
         
         else:

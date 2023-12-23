@@ -18,7 +18,7 @@ import argparse
 
 from pathlib import Path
 from tqdm import tqdm
-from data_utils.ModelNetDataLoader import ModelNetDataLoader
+
 from data_utils.KittiAdbscanDataLoader import KittiAdbscanDataLoader
 
 import box_reg_utils
@@ -32,8 +32,8 @@ def parse_args():
     parser = argparse.ArgumentParser('training')
     parser.add_argument('--use_cpu', action='store_true', default=False, help='use cpu mode')
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
-    parser.add_argument('--batch_size', type=int, default=30, help='batch size in training')
-    parser.add_argument('--model', default='pointnet2_cls_ssg_adbscan', help='model name [default: pointnet2_cls_ssg_adbscan]')
+    parser.add_argument('--batch_size', type=int, default=12, help='batch size in training')   #for msg max is 15, ssg: max is 30
+    parser.add_argument('--model', default='pointnet2_cls_msg_adbscan', help='model name [default: pointnet2_cls_msg_adbscan]')
     parser.add_argument('--num_category', default=9, type=int,  help='training on Kitti_Adbscan')
     parser.add_argument('--epoch', default=200, type=int, help='number of epoch in training')
     parser.add_argument('--learning_rate', default=0.001, type=float, help='learning rate in training')
@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument('--use_uniform_sample', action='store_true', default=False, help='use uniform sampling')
     parser.add_argument('--data_path', type=str,  help='data path')       
     parser.add_argument('--gt_avail_in_test', action='store_true', default = True,  help='gt available in test proposal file')  
-    #gt always present in test proposal file, above line sets the flag to True even when not used on cmd line as needed
+    #gt always present in list_val.txt, above line sets the flag to True even when not used on cmd line as needed
     return parser.parse_args()
 
 
@@ -260,15 +260,15 @@ def main(args):
             #input()
 
             loss = criterion(class_pred, class_target.long(), reg_bbox_pred, propbox, gtbox) #all i/p, o/p are Tensors in gpu                   
-            gtbox_pred = box_reg_utils.estimate_gt_box(reg_bbox_pred,propbox,True)  #all inputs are Tensors in gpu, returns in gpu
-
+            gtbox_pred = box_reg_utils.estimate_gt_box(reg_bbox_pred,propbox,True)  # all inputs are Tensors in gpu, returns in gpu
+            #in above can set propbox = gtbox to see effect of reg_bbox_pred 
             #print('gtbox_pred')
             #print(gtbox_pred)
             
             IoU3D = box_reg_utils.IoU_3D(gtbox.cpu().detach(),gtbox_pred.cpu().detach())  #i/ps must be in cpu   
             IoU3D_sum +=  IoU3D.sum()
-            #print('IoU')  
-            #print(IoU)     
+            print('IoU3D')  
+            print(IoU3D)     
             #input()
 
             for cat in np.unique(class_target.cpu()):              
@@ -336,5 +336,5 @@ def main(args):
 
 if __name__ == '__main__':
     args = parse_args()    
-    torch.set_printoptions(sci_mode=False,linewidth=150)
+    torch.set_printoptions(sci_mode=False,linewidth=400,precision=6)
     main(args)

@@ -147,6 +147,7 @@ def test(compiled_model, loader, result_file, num_class=9):
     instance_acc = totals[0] / totals[1]     
     IoU3D_mean = IoU3D_sum / totals[1] 
    
+    print('IoU3D_mean {}'.format(IoU3D_mean))
     return instance_acc, IoU3D_mean
 
 
@@ -262,5 +263,6 @@ def main(args):
 
 if __name__ == '__main__':
     args = parse_args()
+    torch.set_printoptions(sci_mode=False,linewidth=400,precision=6)
     main(args)
 
