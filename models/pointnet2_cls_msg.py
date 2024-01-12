@@ -2,6 +2,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pointnet2_utils import PointNetSetAbstractionMsg, PointNetSetAbstraction
 
+#layer 0: radius 0: xyz (inchannel=0+3) --> 32 --> 32 --> 64 -->
+#         radius 1: 64+3 --> 64 --> 64 --> 128 -->
+#         radius 2: 128+3 --> 64 --> 96 --> 128 
 
 class get_model(nn.Module):
     def __init__(self,num_class,normal_channel=True):

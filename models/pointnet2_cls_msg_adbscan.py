@@ -16,17 +16,21 @@ class get_model(nn.Module):
         self.sa1 = PointNetSetAbstractionMsg(512, [0.1, 0.2, 0.4], [16, 32, 128], in_channel,[[32, 32, 64], [64, 64, 128], [64, 96, 128]])
         self.sa2 = PointNetSetAbstractionMsg(128, [0.2, 0.4, 0.8], [32, 64, 128], 320,[[64, 64, 128], [128, 128, 256], [128, 128, 256]])
         self.sa3 = PointNetSetAbstraction(None, None, None, 640 + 3, [256, 512, 1024], True)
+        
+        #class head uses o/p of self.sa3
         self.fc1 = nn.Linear(1024, 512)
         self.bn1 = nn.BatchNorm1d(512)
         self.drop1 = nn.Dropout(0.4)
         self.fc2 = nn.Linear(512, 256)
         self.bn2 = nn.BatchNorm1d(256)
         self.drop2 = nn.Dropout(0.5)
-        
         self.fc3 = nn.Linear(256, num_class)
-        
-        self.bbox_pred = nn.Linear(256, 7) # curr model, class --> predict tx, ty tz tw th tl tgt_rz
 
+        #regression head
+        self.fc4 = nn.Linear(1024, 512)
+        self.fc5 = nn.Linear(512, 256)
+        self.fc6 = nn.Linear(256, 7) # curr model, class --> predict tx, ty tz tw th tl tgt_rz
+            
     def forward(self, xyz):
         B, _, _ = xyz.shape
         if self.normal_channel:
@@ -36,15 +40,17 @@ class get_model(nn.Module):
             norm = None
         l1_xyz, l1_points = self.sa1(xyz, norm)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
-        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
-        x = l3_points.view(B, 1024)
-        x = self.drop1(F.relu(self.bn1(self.fc1(x))))
-        x1 = self.drop2(F.relu(self.bn2(self.fc2(x))))  #feature vector feeds 2 heads
-        
-        x = self.fc3(x1)     #ip is B * 256, op B * num_class -- logits of being in each class
-        class_pred  = F.log_softmax(x, -1)  #op B * num_class  -- log(prob) of being in each class
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)        
+        x_pt = l3_points.view(B, 1024)
 
-        reg_bbox_preds = self.bbox_pred(x1) #op B * 7
+        xc1 = self.drop1(F.relu(self.bn1(self.fc1(x_pt))))
+        xc2 = self.drop2(F.relu(self.bn2(self.fc2(xc1))))    
+        xc3 = self.fc3(xc2)                                 #ip is B * 256, op B * num_class -- logits of being in each class
+        class_pred  = F.log_softmax(xc3, -1)  #op B * num_class  -- log(prob) of being in each class
+
+        xr1 = F.relu(self.fc4(x_pt))
+        xr2 = F.relu(self.fc5(xr1))
+        reg_bbox_preds = F.relu(self.fc6(xr2)) #op B * 7
 
         return class_pred, reg_bbox_preds
 

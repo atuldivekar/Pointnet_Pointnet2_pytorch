@@ -44,7 +44,7 @@ def farthest_point_sample(point, npoint):
     point = point[centroids.astype(np.int32)]
     return point
 
-
+#each batch contains 12 clusters, each with npoints = 200 points sampled by fps
 
 class KittiAdbscanDataLoader(Dataset):
     def __init__(self, root, args, split='train'):

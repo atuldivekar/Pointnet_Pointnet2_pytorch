@@ -225,7 +225,7 @@ def main(args):
     if not os.path.isfile(ir_model_xml):
             
         model = importlib.import_module(model_name)
-        classifier = model.get_model(num_class, normal_channel=args.use_normals) 
+        classifier = model.get_model(num_class) 
     
         checkpoint = torch.load(str(experiment_dir) + '/checkpoints/best_model.pth')
         classifier.load_state_dict(checkpoint['model_state_dict'])

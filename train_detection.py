@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument('--use_cpu', action='store_true', default=False, help='use cpu mode')
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
     parser.add_argument('--batch_size', type=int, default=12, help='batch size in training')   #for msg max is 15, ssg: max is 30
-    parser.add_argument('--model', default='pointnet2_cls_msg_adbscan', help='model name [default: pointnet2_cls_msg_adbscan]')
+    parser.add_argument('--model', default='pointnet2_sem_seg_msg_adbscan', help='model name [default: pointnet2_sem_seg_msg_adbscan')
     parser.add_argument('--num_category', default=9, type=int,  help='training on Kitti_Adbscan')
     parser.add_argument('--epoch', default=200, type=int, help='number of epoch in training')
     parser.add_argument('--learning_rate', default=0.001, type=float, help='learning rate in training')
@@ -168,7 +168,7 @@ def main(args):
     shutil.copy('models/pointnet2_utils.py', str(exp_dir))
     shutil.copy('./train_classification.py', str(exp_dir))
 
-    classifier = model.get_model(num_class, normal_channel=args.use_normals)
+    classifier = model.get_model(num_class) 
     
     criterion = model.get_loss()
     classifier.apply(inplace_relu)
@@ -267,8 +267,8 @@ def main(args):
             
             IoU3D = box_reg_utils.IoU_3D(gtbox.cpu().detach(),gtbox_pred.cpu().detach())  #i/ps must be in cpu   
             IoU3D_sum +=  IoU3D.sum()
-            print('IoU3D')  
-            print(IoU3D)     
+            #print('IoU3D')  
+            #print(IoU3D)     
             #input()
 
             for cat in np.unique(class_target.cpu()):              
